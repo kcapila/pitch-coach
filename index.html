@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pitch Coach</title>
+<style>
+:root{--bg:#E9EEF2;--ink:#1B2A3A;--mute:#586979;--panel:#F7F9FB;--line:#C5D0DA;--good:#17855C;--near:#B87A00;--off:#C23B5A;--btn:#1B2A3A;--btnink:#F7F9FB;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16212C;--ink:#E6EDF3;--mute:#93A4B4;--panel:#1E2C39;--line:#33465A;--good:#4FD1A0;--near:#E5B13A;--off:#FF7A95;--btn:#E6EDF3;--btnink:#16212C}}
+:root[data-theme="dark"]{--bg:#16212C;--ink:#E6EDF3;--mute:#93A4B4;--panel:#1E2C39;--line:#33465A;--good:#4FD1A0;--near:#E5B13A;--off:#FF7A95;--btn:#E6EDF3;--btnink:#16212C}
+*,*:before,*:after{box-sizing:inherit}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+main{max-width:760px;margin:0 auto;padding:20px 16px 32px}
+h1{font:600 1.1rem/1.2 system-ui,sans-serif;margin:0 0 16px;color:var(--mute)}
+.readout{display:flex;align-items:flex-end;gap:20px;flex-wrap:wrap}
+.note{font:400 clamp(5.5rem,24vw,9.5rem)/0.9 "Iowan Old Style",Palatino,"Palatino Linotype",Georgia,serif;letter-spacing:-.02em;min-width:2ch;transition:color .12s}
+.note small{font-size:.32em;letter-spacing:0;color:var(--mute);margin-left:.08em}
+.side{padding-bottom:8px}
+.hz{font-size:1.25rem;font-variant-numeric:tabular-nums}
+.verdict{color:var(--mute);min-height:1.5em}
+.meter{position:relative;height:14px;margin:18px 0 6px;background:var(--panel);border:1px solid var(--line);border-radius:7px}
+.meter i{position:absolute;left:50%;top:-5px;bottom:-5px;width:2px;background:var(--line)}
+.meter b{position:absolute;top:50%;left:50%;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:var(--mute);transition:left .08s linear,background .12s}
+.scale{display:flex;justify-content:space-between;color:var(--mute);font-size:.8rem}
+canvas{display:block;width:100%;height:300px;margin:18px 0;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+button,select{font:inherit;min-height:44px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:0 14px}
+button.go{background:var(--btn);color:var(--btnink);border-color:var(--btn);font-weight:600;min-width:150px}
+button:focus-visible,select:focus-visible{outline:3px solid var(--near);outline-offset:2px}
+.tone{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}
+.tone div{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.tone span{display:block;color:var(--mute);font-size:.85rem}
+.bar{height:6px;border-radius:3px;background:var(--line);margin-top:8px;overflow:hidden}
+.bar u{display:block;height:100%;width:0;background:var(--ink);transition:width .08s linear}
+#msg{color:var(--off);min-height:1.5em;margin-top:12px}
+footer{margin-top:20px;color:var(--mute);font-size:.85rem}
+</style>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1B2A3A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+</head>
+<body>
+<main>
+<h1>Pitch Coach</h1>
+
+<div class="readout">
+  <div class="note" id="note" aria-live="off">–</div>
+  <div class="side">
+    <div class="hz" id="hz">&nbsp;</div>
+    <div class="verdict" id="verdict">Press Start and sing a note.</div>
+  </div>
+</div>
+
+<div class="meter" aria-hidden="true"><i></i><b id="needle"></b></div>
+<div class="scale" aria-hidden="true"><span id="lo">Flat</span><span>In tune</span><span id="hi">Sharp</span></div>
+
+<canvas id="trace" aria-label="Pitch over time"></canvas>
+
+<div class="controls">
+  <button class="go" id="go">Start</button>
+  <label>Target note
+    <select id="target"><option value="">None, sing freely</option></select>
+  </label>
+  <label>Scroll speed
+    <select id="speed">
+      <option value="1200">Very slow</option>
+      <option value="720">Slow</option>
+      <option value="360" selected>Normal</option>
+      <option value="180">Fast</option>
+    </select>
+  </label>
+</div>
+<div id="msg" role="status"></div>
+
+<div class="tone">
+  <div><span>Volume</span><span id="vol">–</span><div class="bar"><u id="volbar"></u></div></div>
+  <div><span>Tone color</span><span id="tc">–</span><div class="bar"><u id="tcbar"></u></div></div>
+</div>
+
+<footer>Runs on your device. Audio is analysed live and never recorded or sent anywhere.</footer>
+</main>
+
+<script>
+const NAMES=['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
+const $=id=>document.getElementById(id);
+const noteName=m=>NAMES[((m%12)+12)%12]+'<small>'+(Math.floor(m/12)-1)+'</small>';
+const noteText=m=>NAMES[((m%12)+12)%12]+(Math.floor(m/12)-1);
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// Target picker: C3 to C6
+const sel=$('target');
+for(let m=48;m<=84;m++){const o=document.createElement('option');o.value=m;o.textContent=noteText(m);sel.appendChild(o)}
+
+let ac,an,stream,raf,running=false,tbuf,fbuf;
+let MAXH=360; const hist=[]; let recent=[], miss=0, center=60, bright=0;
+
+function yin(b,sr){
+  const N=b.length>>1, minT=Math.floor(sr/1100), maxT=Math.min(N-1,Math.floor(sr/70));
+  const cm=new Float32Array(maxT+2); cm[0]=1; let run=0;
+  for(let t=1;t<=maxT;t++){let s=0;for(let i=0;i<N;i++){const x=b[i]-b[i+t];s+=x*x}run+=s;cm[t]=s*t/run}
+  for(let t=minT;t<maxT;t++){
+    if(cm[t]<0.12){
+      while(t+1<maxT&&cm[t+1]<cm[t])t++;
+      const a=cm[t-1],c0=cm[t],c=cm[t+1],d=a-2*c0+c,sh=d?0.5*(a-c)/d:0;
+      return sr/(t+sh);
+    }
+  }
+  return null;
+}
+
+function colorFor(cents){const a=Math.abs(cents);return a<=15?css('--good'):a<=35?css('--near'):css('--off')}
+
+function frame(){
+  raf=requestAnimationFrame(frame);
+  an.getFloatTimeDomainData(tbuf);
+  let sum=0;for(let i=0;i<tbuf.length;i++)sum+=tbuf[i]*tbuf[i];
+  const rms=Math.sqrt(sum/tbuf.length), db=20*Math.log10(rms+1e-9);
+  const lvl=Math.max(0,Math.min(1,(db+60)/50));
+  $('vol').textContent=rms<0.004?'Quiet':lvl<.4?'Soft':lvl<.8?'Comfortable':'Loud';
+  $('volbar').style.width=(lvl*100)+'%';
+
+  let f=rms>0.01?yin(tbuf,ac.sampleRate):null;
+  let midi=null;
+  if(f){
+    midi=69+12*Math.log2(f/440);
+    recent.push(midi);if(recent.length>5)recent.shift();
+    midi=[...recent].sort((a,b)=>a-b)[recent.length>>1];
+    miss=0;
+    // tone color: spectral centroid relative to the sung pitch
+    an.getFloatFrequencyData(fbuf);
+    let num=0,den=0,binHz=ac.sampleRate/an.fftSize;
+    for(let i=1;i<fbuf.length;i++){const m=Math.pow(10,fbuf[i]/20);num+=i*binHz*m;den+=m}
+    if(den>0){const r=(num/den)/f;bright+=(r-bright)*0.1}
+  }else{miss++;if(miss>8)recent=[]}
+
+  hist.push(midi);while(hist.length>MAXH)hist.shift();
+
+  const tgt=sel.value===''?null:+sel.value;
+  const range=tgt===null?50:100;
+  if(midi!==null){
+    const nearest=Math.round(midi);
+    const ref=tgt===null?nearest:tgt;
+    const cents=(midi-ref)*100;
+    const col=colorFor(tgt===null?cents:((midi-nearest)*100));
+    $('note').innerHTML=noteName(nearest);
+    $('note').style.color=col;
+    $('hz').textContent=f.toFixed(1)+' Hz';
+    const c=Math.max(-range,Math.min(range,cents));
+    $('needle').style.left=(50+c/range*50)+'%';
+    $('needle').style.background=col;
+    const ac2=Math.abs(cents);
+    $('verdict').textContent=ac2<=15?'In tune':Math.round(ac2)+' cents '+(cents<0?'flat':'sharp')+(tgt!==null?' of '+noteText(tgt):'');
+    $('tc').textContent=bright<3?'Mellow':bright<6?'Balanced':'Bright';
+    $('tcbar').style.width=Math.min(100,bright/10*100)+'%';
+    center+=(midi-center)*0.05;
+  }else if(miss>8){
+    $('note').innerHTML='–';$('note').style.color='';$('hz').innerHTML='&nbsp;';
+    $('verdict').textContent='Listening…';$('needle').style.left='50%';$('needle').style.background='';
+    $('tc').textContent='–';$('tcbar').style.width='0';
+  }
+  if(tgt!==null)center+=(tgt-center)*0.05;
+  draw(tgt);
+}
+
+function draw(tgt){
+  const cv=$('trace'),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  if(cv.width!==Math.round(w*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr)}
+  const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);
+  const span=18,y=m=>h*(0.5-(m-center)/span);
+  g.font='12px system-ui,sans-serif';g.textBaseline='middle';
+  const lo=Math.floor(center-span/2)-1,hi=Math.ceil(center+span/2)+1;
+  if(tgt!==null){g.fillStyle=css('--good');g.globalAlpha=.16;g.fillRect(0,y(tgt+.15),w,y(tgt-.15)-y(tgt+.15));g.globalAlpha=1}
+  for(let m=lo;m<=hi;m++){
+    const nat=![1,3,6,8,10].includes(((m%12)+12)%12),yy=y(m);
+    g.strokeStyle=css('--line');g.globalAlpha=nat?1:.35;g.lineWidth=1;
+    g.beginPath();g.moveTo(40,yy);g.lineTo(w,yy);g.stroke();g.globalAlpha=1;
+    if(nat){g.fillStyle=css('--mute');g.fillText(noteText(m),6,yy)}
+  }
+  g.lineWidth=4;g.lineCap='round';
+  const x=i=>40+(w-48)*(i/(MAXH-1));
+  for(let i=1;i<hist.length;i++){
+    const a=hist[i-1],b=hist[i];if(a===null||b===null||Math.abs(a-b)>2)continue;
+    g.strokeStyle=colorFor((b-Math.round(b))*100);
+    g.beginPath();g.moveTo(x(i-1+MAXH-hist.length),y(a));g.lineTo(x(i+MAXH-hist.length),y(b));g.stroke();
+  }
+}
+
+async function start(){
+  $('msg').textContent='';
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    $('msg').textContent='This browser cannot access a microphone. Open the page in Chrome, Safari or Firefox.';return}
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+  }catch(e){
+    const framed=window.self!==window.top;
+    const why=e&&e.name==='NotFoundError'?'No microphone was found on this device.'
+      :e&&e.name==='NotReadableError'?'Another app is using the microphone. Close it and try again.'
+      :framed?'This page is running inside a frame that does not allow the microphone. Open it in its own browser tab, or use the downloaded file on a computer.'
+      :!window.isSecureContext?'The microphone only works on secure (https) pages.'
+      :'Microphone permission was denied. Allow it in your browser\'s site settings, then reload.';
+    $('msg').textContent=why+' ['+(e&&e.name||'error')+(framed?', framed':'')+(window.isSecureContext?'':', insecure')+']';return}
+  ac=new (window.AudioContext||window.webkitAudioContext)();
+  if(ac.state==='suspended')await ac.resume();
+  an=ac.createAnalyser();an.fftSize=2048;an.smoothingTimeConstant=0;
+  ac.createMediaStreamSource(stream).connect(an);
+  tbuf=new Float32Array(an.fftSize);fbuf=new Float32Array(an.frequencyBinCount);
+  running=true;$('go').textContent='Stop';$('verdict').textContent='Listening…';
+  frame();
+}
+function stop(){
+  cancelAnimationFrame(raf);running=false;
+  stream&&stream.getTracks().forEach(t=>t.stop());ac&&ac.close();
+  $('go').textContent='Start';$('verdict').textContent='Press Start and sing a note.';
+  $('note').innerHTML='–';$('note').style.color='';$('hz').innerHTML='&nbsp;';
+  hist.length=0;recent=[];
+}
+$('speed').onchange=e=>{MAXH=+e.target.value;while(hist.length>MAXH)hist.shift()};
+$('go').onclick=()=>running?stop():start();
+sel.onchange=()=>{const t=sel.value!=='';$('lo').textContent=t?'Flat':'Flat';$('hi').textContent='Sharp'};
+if('serviceWorker' in navigator&&location.protocol.indexOf('http')===0)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
