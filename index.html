@@ -36,6 +36,14 @@ button:focus-visible,select:focus-visible{outline:3px solid var(--near);outline-
 .bar u{display:block;height:100%;width:0;background:var(--ink);transition:width .08s linear}
 #msg{color:var(--off);min-height:1.5em;margin-top:12px}
 footer{margin-top:20px;color:var(--mute);font-size:.85rem}
+.song h2{font:600 1.05rem/1.3 system-ui,sans-serif;margin:30px 0 6px}
+.hint{color:var(--mute);margin:0 0 12px;font-size:.9rem}
+.filebtn{position:relative;display:inline-flex;align-items:center;min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);cursor:pointer}
+.filebtn input{position:absolute;inset:0;width:100%;opacity:0;cursor:pointer}
+.filebtn:focus-within{outline:3px solid var(--near);outline-offset:2px}
+.srow{display:flex;justify-content:space-between;color:var(--mute);font-variant-numeric:tabular-nums}
+button:disabled{opacity:.45}
+[hidden]{display:none!important}
 </style>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#1B2A3A">
@@ -82,6 +90,21 @@ footer{margin-top:20px;color:var(--mute);font-size:.85rem}
   <div><span>Volume</span><span id="vol">–</span><div class="bar"><u id="volbar"></u></div></div>
   <div><span>Tone color</span><span id="tc">–</span><div class="bar"><u id="tcbar"></u></div></div>
 </div>
+
+<section class="song">
+  <h2>Sing along to a recording</h2>
+  <p class="hint">Upload a clip with a single voice. Pitch Coach maps its melody, then plays it while you sing along. Use headphones. Octave differences are ignored, so sing in your own range.</p>
+  <div class="controls">
+    <label class="filebtn">Upload audio<input type="file" id="file" accept="audio/*"></label>
+    <button class="go" id="splay" type="button" disabled>▶ Play &amp; sing</button>
+    <label>Hear
+      <select id="hear"><option value="both">Original + guide tone</option><option value="orig">Original only</option><option value="guide">Guide tone only</option></select>
+    </label>
+  </div>
+  <div id="sinfo" class="verdict" role="status">No recording loaded.</div>
+  <canvas id="songcv" hidden aria-label="Melody map of the uploaded recording"></canvas>
+  <div class="srow"><span id="stime"></span><span id="score"></span></div>
+</section>
 
 <footer>Runs on your device. Audio is analysed live and never recorded or sent anywhere.</footer>
 </main>
@@ -142,6 +165,7 @@ function frame(){
   }else{miss++;if(miss>8)recent=[]}
 
   hist.push(midi);while(hist.length>MAXH)hist.shift();
+  if(songPlaying&&songRef!==null){songTotal++;if(midi!==null){const d=fold(midi-songRef);if(Math.abs(d)<0.5)songHits++;userPts.push([songNow,songRef+d,d*100]);while(userPts.length&&userPts[0][0]<songNow-12)userPts.shift()}}
 
   const tgt=sel.value===''?null:+sel.value;
   const range=tgt===null?50:100;
@@ -253,6 +277,96 @@ function playTone(){
   oscs[0].onended=()=>{playing=false;stopTone=null;$('play').textContent='▶ Play note'};
   stopTone=()=>{const n=pctx.currentTime;master.gain.cancelScheduledValues(n);master.gain.setValueAtTime(master.gain.value,n);master.gain.linearRampToValueAtTime(0,n+0.08);oscs.forEach(o=>o.stop(n+0.1))};
 }
+const fold=d=>((d+6)%12+12)%12-6;
+const fmt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+let song=null,songPlaying=false,src=null,og=null,osc=null,gg=null,songT0=0,songNow=0,songRef=null,songCenter=60,songHits=0,songTotal=0,userPts=[],sraf=0;
+
+async function loadSong(file){
+  const info=$('sinfo');stopSong();song=null;$('splay').disabled=true;$('songcv').hidden=true;$('stime').textContent='';$('score').textContent='';
+  info.textContent='Reading file…';
+  try{
+    pctx=pctx||new (window.AudioContext||window.webkitAudioContext)();
+    const buf=await pctx.decodeAudioData(await file.arrayBuffer());
+    const sr=buf.sampleRate,dec=Math.max(1,Math.round(sr/12000)),dsr=sr/dec;
+    const n=Math.floor(Math.min(buf.duration,360)*dsr),x=new Float32Array(n),chans=[];
+    for(let c=0;c<buf.numberOfChannels;c++)chans.push(buf.getChannelData(c));
+    let pk=0;
+    for(let j=0;j<n;j++){let s=0;for(const d of chans)for(let k=0;k<dec;k++)s+=d[j*dec+k];s/=chans.length*dec;x[j]=s;if(Math.abs(s)>pk)pk=Math.abs(s)}
+    if(pk>0)for(let j=0;j<n;j++)x[j]*=0.3/pk;
+    const WIN=1024,HOP=256,raw=[];
+    for(let p=0,c=0;p+WIN<=n;p+=HOP,c++){
+      const w=x.subarray(p,p+WIN);let e=0;for(let k=0;k<WIN;k++)e+=w[k]*w[k];
+      let m=null;
+      if(Math.sqrt(e/WIN)>0.02){const f=yin(w,dsr);if(f)m=69+12*Math.log2(f/440)}
+      raw.push(m);
+      if(c%200===0){info.textContent='Mapping melody… '+Math.round(p/n*100)+'%';await new Promise(r=>setTimeout(r))}
+    }
+    const map=raw.map((_,i)=>{const v=[];for(let k=i-2;k<=i+2;k++)if(raw[k]!=null)v.push(raw[k]);if(v.length<3)return null;v.sort((a,b)=>a-b);return v[v.length>>1]});
+    const voiced=map.filter(v=>v!==null).sort((a,b)=>a-b);
+    if(voiced.length<20){info.textContent='Could not find a clear melody. Try a recording with one voice and little background noise.';return}
+    songCenter=voiced[voiced.length>>1];
+    song={buf,map,hop:HOP/dsr,dur:buf.duration};
+    info.textContent='Ready: '+file.name+' ('+fmt(buf.duration)+'). Melody found in '+Math.round(voiced.length/map.length*100)+'% of the clip.'+(buf.duration>360?' Only the first 6 minutes were mapped.':'');
+    $('songcv').hidden=false;$('splay').disabled=false;drawSong(0);
+  }catch(e){info.textContent='Could not read that audio file. Try an MP3, M4A or WAV.'}
+}
+
+async function playSong(){
+  if(!song)return;
+  if(songPlaying){stopSong();return}
+  pctx.resume();
+  if(!running)await start();
+  const mode=$('hear').value;
+  src=pctx.createBufferSource();src.buffer=song.buf;
+  og=pctx.createGain();og.gain.value=mode==='guide'?0:1;src.connect(og);og.connect(pctx.destination);
+  osc=pctx.createOscillator();osc.type='triangle';gg=pctx.createGain();gg.gain.value=0;osc.connect(gg);gg.connect(pctx.destination);osc.start();
+  songT0=pctx.currentTime+0.15;src.start(songT0);
+  src.onended=()=>{if(songPlaying)stopSong()};
+  songHits=songTotal=0;userPts=[];songRef=null;songPlaying=true;$('splay').textContent='■ Stop';
+  songLoop();
+}
+function stopSong(){
+  if(!songPlaying)return;
+  songPlaying=false;cancelAnimationFrame(sraf);
+  try{src.stop()}catch(e){}try{osc.stop()}catch(e){}
+  songRef=null;$('splay').textContent='▶ Play & sing';
+  if(songTotal>20)$('score').textContent='Final match '+Math.round(songHits/songTotal*100)+'%';
+}
+function songLoop(){
+  if(!songPlaying)return;
+  sraf=requestAnimationFrame(songLoop);
+  const t=Math.max(0,pctx.currentTime-songT0),ref=song.map[Math.floor(t/song.hop)];
+  const r=ref==null?null:ref,now=pctx.currentTime,on=r!==null&&$('hear').value!=='orig';
+  if(on){osc.frequency.setTargetAtTime(440*Math.pow(2,(r-69)/12),now,0.03);gg.gain.setTargetAtTime(0.18,now,0.02)}else gg.gain.setTargetAtTime(0,now,0.03);
+  songNow=t;songRef=r;
+  drawSong(t);
+  $('stime').textContent=fmt(t)+' / '+fmt(song.dur);
+  if(songTotal>20)$('score').textContent='Match '+Math.round(songHits/songTotal*100)+'%';
+}
+function drawSong(t){
+  const cv=$('songcv'),dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  if(cv.width!==Math.round(w*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr)}
+  const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);
+  if(songRef!==null)songCenter+=(songRef-songCenter)*0.05;
+  const span=18,W=8,px=w*0.3,y=m=>h*(0.5-(m-songCenter)/span),X=tt=>px+(tt-t)/W*w;
+  g.font='12px system-ui,sans-serif';g.textBaseline='middle';
+  const lo=Math.floor(songCenter-span/2)-1,hi=Math.ceil(songCenter+span/2)+1;
+  for(let m=lo;m<=hi;m++){
+    const nat=![1,3,6,8,10].includes(((m%12)+12)%12),yy=y(m);
+    g.strokeStyle=css('--line');g.globalAlpha=nat?1:.35;g.lineWidth=1;
+    g.beginPath();g.moveTo(40,yy);g.lineTo(w,yy);g.stroke();g.globalAlpha=1;
+    if(nat){g.fillStyle=css('--mute');g.fillText(noteText(m),6,yy)}
+  }
+  const mp=song.map,i0=Math.max(1,Math.floor((t-px/w*W)/song.hop)),i1=Math.min(mp.length-1,Math.ceil((t+(1-px/w)*W)/song.hop));
+  g.lineWidth=8;g.lineCap='round';g.strokeStyle=css('--mute');g.globalAlpha=.5;
+  for(let i=i0;i<=i1;i++){const a=mp[i-1],b=mp[i];if(a===null||b===null||Math.abs(a-b)>2)continue;g.beginPath();g.moveTo(X((i-1)*song.hop),y(a));g.lineTo(X(i*song.hop),y(b));g.stroke()}
+  g.globalAlpha=1;
+  for(const p of userPts){g.fillStyle=colorFor(p[2]);g.beginPath();g.arc(X(p[0]),y(p[1]),3.5,0,6.283);g.fill()}
+  g.strokeStyle=css('--ink');g.lineWidth=2;g.beginPath();g.moveTo(px,0);g.lineTo(px,h);g.stroke();
+}
+$('file').onchange=e=>{const f=e.target.files[0];if(f)loadSong(f)};
+$('splay').onclick=playSong;
+$('hear').onchange=()=>{if(og)og.gain.value=$('hear').value==='guide'?0:1};
 $('play').onclick=playTone;
 $('speed').onchange=e=>{MAXH=+e.target.value;while(hist.length>MAXH)hist.shift()};
 $('go').onclick=()=>running?stop():start();
