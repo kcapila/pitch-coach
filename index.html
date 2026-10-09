@@ -74,6 +74,7 @@ footer{margin-top:20px;color:var(--mute);font-size:.85rem}
       <option value="180">Fast</option>
     </select>
   </label>
+  <button type="button" id="play">▶ Play note</button>
 </div>
 <div id="msg" role="status"></div>
 
@@ -97,6 +98,7 @@ const sel=$('target');
 for(let m=48;m<=84;m++){const o=document.createElement('option');o.value=m;o.textContent=noteText(m);sel.appendChild(o)}
 
 let ac,an,stream,raf,running=false,tbuf,fbuf;
+let pctx,playing=false,stopTone=null,lastNote=null;
 let MAXH=360; const hist=[]; let recent=[], miss=0, center=60, bright=0;
 
 function yin(b,sr){
@@ -124,12 +126,13 @@ function frame(){
   $('vol').textContent=rms<0.004?'Quiet':lvl<.4?'Soft':lvl<.8?'Comfortable':'Loud';
   $('volbar').style.width=(lvl*100)+'%';
 
-  let f=rms>0.01?yin(tbuf,ac.sampleRate):null;
+  let f=(rms>0.01&&!playing)?yin(tbuf,ac.sampleRate):null;
   let midi=null;
   if(f){
     midi=69+12*Math.log2(f/440);
     recent.push(midi);if(recent.length>5)recent.shift();
     midi=[...recent].sort((a,b)=>a-b)[recent.length>>1];
+    lastNote=Math.round(midi);
     miss=0;
     // tone color: spectral centroid relative to the sung pitch
     an.getFloatFrequencyData(fbuf);
@@ -219,6 +222,38 @@ function stop(){
   $('note').innerHTML='–';$('note').style.color='';$('hz').innerHTML='&nbsp;';
   hist.length=0;recent=[];
 }
+function playTone(){
+  if(playing&&stopTone){stopTone();return}
+  const tgt=sel.value!==''?+sel.value:lastNote;
+  if(tgt===null){$('verdict').textContent='Pick a target note first, or sing one.';return}
+  pctx=pctx||new (window.AudioContext||window.webkitAudioContext)();
+  pctx.resume();
+  const f0=440*Math.pow(2,(tgt-69)/12),t0=pctx.currentTime,dur=3;
+  const master=pctx.createGain();
+  master.gain.setValueAtTime(0.5,t0);master.gain.setValueAtTime(0.5,t0+dur-0.3);master.gain.linearRampToValueAtTime(0,t0+dur);
+  const lp=pctx.createBiquadFilter();lp.type='lowpass';
+  lp.frequency.setValueAtTime(Math.min(9000,f0*12),t0);
+  lp.frequency.exponentialRampToValueAtTime(Math.max(700,f0*2.5),t0+dur);
+  master.connect(lp);lp.connect(pctx.destination);
+  const amps=[1,.55,.38,.22,.14,.09,.05],oscs=[];
+  amps.forEach((a,i)=>{
+    const n=i+1,f=f0*n*Math.sqrt(1+0.0004*n*n);
+    if(f>10000)return;
+    const tau=1.1/(1+0.5*(n-1));
+    [-1.5,1.5].forEach(d=>{
+      const o=pctx.createOscillator(),g=pctx.createGain();
+      o.type='sine';o.frequency.value=f;o.detune.value=d;
+      g.gain.setValueAtTime(0,t0);
+      g.gain.linearRampToValueAtTime(a*0.1,t0+0.006);
+      g.gain.setTargetAtTime(0,t0+0.006,tau);
+      o.connect(g);g.connect(master);o.start(t0);o.stop(t0+dur);oscs.push(o);
+    });
+  });
+  playing=true;$('play').textContent='■ Stop';
+  oscs[0].onended=()=>{playing=false;stopTone=null;$('play').textContent='▶ Play note'};
+  stopTone=()=>{const n=pctx.currentTime;master.gain.cancelScheduledValues(n);master.gain.setValueAtTime(master.gain.value,n);master.gain.linearRampToValueAtTime(0,n+0.08);oscs.forEach(o=>o.stop(n+0.1))};
+}
+$('play').onclick=playTone;
 $('speed').onchange=e=>{MAXH=+e.target.value;while(hist.length>MAXH)hist.shift()};
 $('go').onclick=()=>running?stop():start();
 sel.onchange=()=>{const t=sel.value!=='';$('lo').textContent=t?'Flat':'Flat';$('hi').textContent='Sharp'};
